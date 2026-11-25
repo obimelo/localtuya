@@ -1,0 +1,21 @@
+name: Home Assistant compatibility
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        homeassistant: ["2025.11.3", "2026.11.3"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test LocalTuya against Core ${{ matrix.homeassistant }}
+        run: |
+          docker run --rm --network none -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$PWD:/workspace:ro" -w /workspace --entrypoint python \
+            "ghcr.io/home-assistant/home-assistant:${{ matrix.homeassistant }}" \
+            -m unittest discover -s tests -v

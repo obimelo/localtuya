@@ -8,6 +8,7 @@ import homeassistant.util.color as color_util
 import voluptuous as vol
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
+    ATTR_COLOR_TEMP_KELVIN,
     ATTR_EFFECT,
     ATTR_HS_COLOR,
     DOMAIN,
@@ -170,11 +171,11 @@ class LocaltuyaLight(LocalTuyaEntity, LightEntity):
             CONF_BRIGHTNESS_UPPER, DEFAULT_UPPER_BRIGHTNESS
         )
         self._upper_color_temp = self._upper_brightness
-        self._max_mired = color_util.color_temperature_kelvin_to_mired(
-            self._config.get(CONF_COLOR_TEMP_MIN_KELVIN, DEFAULT_MIN_KELVIN)
-        )
-        self._min_mired = color_util.color_temperature_kelvin_to_mired(
-            self._config.get(CONF_COLOR_TEMP_MAX_KELVIN, DEFAULT_MAX_KELVIN)
+        self._attr_min_color_temp_kelvin, self._attr_max_color_temp_kelvin = sorted(
+            (
+                self._config.get(CONF_COLOR_TEMP_MIN_KELVIN, DEFAULT_MIN_KELVIN),
+                self._config.get(CONF_COLOR_TEMP_MAX_KELVIN, DEFAULT_MAX_KELVIN),
+            )
         )
         self._color_temp_reverse = self._config.get(
             CONF_COLOR_TEMP_REVERSE, DEFAULT_COLOR_TEMP_REVERSE
@@ -205,7 +206,11 @@ class LocaltuyaLight(LocalTuyaEntity, LightEntity):
     @property
     def brightness(self):
         """Return the brightness of the light."""
-        if self.is_color_mode or self.is_white_mode:
+        if (
+            self._brightness is not None
+            and self._lower_brightness != self._upper_brightness
+            and (self.is_color_mode or self.is_white_mode)
+        ):
             return map_range(
                 self._brightness, self._lower_brightness, self._upper_brightness, 0, 255
             )
@@ -224,48 +229,36 @@ class LocaltuyaLight(LocalTuyaEntity, LightEntity):
         return None
 
     @property
-    def color_temp(self):
-        """Return the color_temp of the light."""
-        if self.has_config(CONF_COLOR_TEMP) and self.is_white_mode:
-            color_temp_value = (
-                self._upper_color_temp - self._color_temp
-                if self._color_temp_reverse
-                else self._color_temp
-            )
-            return int(
-                self._max_mired
-                - (
-                    ((self._max_mired - self._min_mired) / self._upper_color_temp)
-                    * color_temp_value
-                )
-            )
-        return None
+    def color_temp_kelvin(self):
+        """Report Kelvin while keeping the device's reciprocal-temperature scale."""
+        if (
+            not self.has_config(CONF_COLOR_TEMP)
+            or not self.is_white_mode
+            or self._color_temp is None
+            or not self._upper_color_temp
+        ):
+            return None
 
-    @property
-    def min_mireds(self):
-        """Return color temperature min mireds."""
-        return self._min_mired
-
-    @property
-    def max_mireds(self):
-        """Return color temperature max mireds."""
-        return self._max_mired
+        fraction = min(max(self._color_temp / self._upper_color_temp, 0), 1)
+        if self._color_temp_reverse:
+            fraction = 1 - fraction
+        warm = 1 / self.min_color_temp_kelvin
+        cool = 1 / self.max_color_temp_kelvin
+        return round(1 / (warm + (cool - warm) * fraction))
 
     @property
     def effect(self):
         """Return the current effect for this light."""
         if self.is_scene_mode or self.is_music_mode:
             return self._effect
+        if (color_mode := self.__get_color_mode()) in self._scenes.values():
+            return self.__find_scene_by_scene_data(color_mode)
         return None
 
     @property
     def effect_list(self):
         """Return the list of supported effects for this light."""
-        if self.is_scene_mode or self.is_music_mode:
-            return self._effect
-        elif (color_mode := self.__get_color_mode()) in self._scenes.values():
-            return self.__find_scene_by_scene_data(color_mode)
-        return None
+        return self._effect_list
 
     @property
     def supported_color_modes(self) -> set[ColorMode] | set[str] | None:
@@ -289,7 +282,7 @@ class LocaltuyaLight(LocalTuyaEntity, LightEntity):
     def supported_features(self) -> LightEntityFeature:
         """Flag supported features."""
         supports = LightEntityFeature(0)
-        if self.has_config(CONF_SCENE) or self.has_config(CONF_MUSIC_MODE):
+        if self.has_config(CONF_SCENE) or self._config.get(CONF_MUSIC_MODE):
             supports |= LightEntityFeature.EFFECT
         return supports
 
@@ -303,10 +296,10 @@ class LocaltuyaLight(LocalTuyaEntity, LightEntity):
             return ColorMode.HS
         if self.is_white_mode:
             return ColorMode.COLOR_TEMP
-        if self._brightness:
+        if self.effect is not None:
             return ColorMode.BRIGHTNESS
 
-        return ColorMode.ONOFF
+        return ColorMode.HS
 
     @property
     def is_white_mode(self):
@@ -333,7 +326,8 @@ class LocaltuyaLight(LocalTuyaEntity, LightEntity):
         return color_mode is not None and color_mode == self._modes.music
 
     def __is_color_rgb_encoded(self):
-        return len(self.dps_conf(CONF_COLOR)) > 12
+        color = self.dps_conf(CONF_COLOR)
+        return isinstance(color, str) and len(color) > 12
 
     def __find_scene_by_scene_data(self, data):
         return next(
@@ -363,7 +357,7 @@ class LocaltuyaLight(LocalTuyaEntity, LightEntity):
                 else:
                     states[self._config.get(CONF_COLOR_MODE)] = MODE_SCENE
                     states[self._config.get(CONF_SCENE)] = scene
-            elif kwargs[ATTR_EFFECT] == SCENE_MUSIC:
+            elif kwargs[ATTR_EFFECT] == SCENE_MUSIC and self._config.get(CONF_MUSIC_MODE):
                 states[self._config.get(CONF_COLOR_MODE)] = MODE_MUSIC
 
         if ATTR_BRIGHTNESS in kwargs and (
@@ -378,33 +372,38 @@ class LocaltuyaLight(LocalTuyaEntity, LightEntity):
                 self._lower_brightness,
                 self._upper_brightness,
             )
-            if self.is_white_mode:
+            if self.is_white_mode and self.has_config(CONF_BRIGHTNESS):
                 states[self._config.get(CONF_BRIGHTNESS)] = brightness
-            else:
+            elif self.has_config(CONF_COLOR):
+                hs = self._hs or (0, 0)
                 if self.__is_color_rgb_encoded():
                     rgb = color_util.color_hsv_to_RGB(
-                        self._hs[0],
-                        self._hs[1],
+                        hs[0],
+                        hs[1],
                         int(brightness * 100 / self._upper_brightness),
                     )
                     color = "{:02x}{:02x}{:02x}{:04x}{:02x}{:02x}".format(
                         round(rgb[0]),
                         round(rgb[1]),
                         round(rgb[2]),
-                        round(self._hs[0]),
-                        round(self._hs[1] * 255 / 100),
+                        round(hs[0]),
+                        round(hs[1] * 255 / 100),
                         brightness,
                     )
                 else:
                     color = "{:04x}{:04x}{:04x}".format(
-                        round(self._hs[0]), round(self._hs[1] * 10.0), brightness
+                        round(hs[0]), round(hs[1] * 10.0), brightness
                     )
                 states[self._config.get(CONF_COLOR)] = color
-                states[self._config.get(CONF_COLOR_MODE)] = MODE_COLOR
+                states[self._config.get(CONF_COLOR_MODE)] = self._modes.color
 
         if ATTR_HS_COLOR in kwargs and ColorMode.HS in self.supported_color_modes:
             if brightness is None:
-                brightness = self._brightness
+                brightness = (
+                    self._brightness
+                    if self._brightness is not None
+                    else self._upper_brightness
+                )
             hs = kwargs[ATTR_HS_COLOR]
             if hs[1] == 0 and self.has_config(CONF_BRIGHTNESS):
                 states[self._config.get(CONF_BRIGHTNESS)] = brightness
@@ -427,27 +426,29 @@ class LocaltuyaLight(LocalTuyaEntity, LightEntity):
                         round(hs[0]), round(hs[1] * 10.0), brightness
                     )
                 states[self._config.get(CONF_COLOR)] = color
-                states[self._config.get(CONF_COLOR_MODE)] = MODE_COLOR
+                states[self._config.get(CONF_COLOR_MODE)] = self._modes.color
 
-        if ColorMode.COLOR_TEMP in kwargs and ColorMode.COLOR_TEMP in self.supported_color_modes:
+        if ATTR_COLOR_TEMP_KELVIN in kwargs and self.has_config(CONF_COLOR_TEMP):
+            kelvin = min(
+                max(kwargs[ATTR_COLOR_TEMP_KELVIN], self.min_color_temp_kelvin),
+                self.max_color_temp_kelvin,
+            )
+            warm = 1 / self.min_color_temp_kelvin
+            cool = 1 / self.max_color_temp_kelvin
+            fraction = (warm - 1 / kelvin) / (warm - cool) if warm != cool else 0
+            if self._color_temp_reverse:
+                fraction = 1 - fraction
+            states[self._config.get(CONF_COLOR_MODE)] = MODE_WHITE
             if brightness is None:
                 brightness = self._brightness
-            mired = int(kwargs[ColorMode.COLOR_TEMP])
-            if self._color_temp_reverse:
-                mired = self._max_mired - (mired - self._min_mired)
-            if mired < self._min_mired:
-                mired = self._min_mired
-            elif mired > self._max_mired:
-                mired = self._max_mired
-            color_temp = int(
-                self._upper_color_temp
-                - (self._upper_color_temp / (self._max_mired - self._min_mired))
-                * (mired - self._min_mired)
+            if brightness is not None:
+                states[self._config.get(CONF_BRIGHTNESS)] = brightness
+            states[self._config[CONF_COLOR_TEMP]] = round(
+                fraction * self._upper_color_temp
             )
-            states[self._config.get(CONF_COLOR_MODE)] = MODE_WHITE
-            states[self._config.get(CONF_BRIGHTNESS)] = brightness
-            states[self._config.get(CONF_COLOR_TEMP)] = color_temp
-        await self._device.set_dps(states)
+        states.pop(None, None)
+        if states:
+            await self._device.set_dps(states)
 
     async def async_turn_off(self, **kwargs):
         """Turn Tuya light off."""
@@ -459,10 +460,7 @@ class LocaltuyaLight(LocalTuyaEntity, LightEntity):
         supported = self.supported_features
         self._effect = None
 
-        if (ColorMode.BRIGHTNESS in self.supported_color_modes
-            or self.has_config(CONF_BRIGHTNESS)
-            or self.has_config(CONF_COLOR)
-        ):
+        if self.has_config(CONF_BRIGHTNESS):
             self._brightness = self.dps_conf(CONF_BRIGHTNESS)
 
         if ColorMode.HS in self.supported_color_modes:

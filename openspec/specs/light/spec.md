@@ -24,7 +24,11 @@ Brightness SHALL be mapped linearly between Home Assistant `0–255` and the con
 
 ### Requirement: Scale white temperature
 
-White temperature SHALL use a mired range derived from configured Kelvin limits (`2700–6500` by default; each accepts `1500–8000`) and a device upper limit equal to maximum brightness. The temperature command SHALL clamp to the mired range, honor the reverse-temperature toggle, and write white mode, brightness and temperature when using mapped controls.
+The light SHALL expose Kelvin color temperature and limits to Home Assistant (`2700–6500` K by default; each limit accepts `1500–8000` K). It SHALL clamp to those limits and map reciprocal Kelvin onto the device DP range from zero to maximum brightness. It SHALL honor the reverse-temperature toggle and never send an unmapped DP for an optional mode or brightness control.
+
+#### Scenario: Call Home Assistant's light turn-on action
+- **WHEN** a user requests `color_temp_kelvin: 6500` with the default non-reversed limits
+- **THEN** a color-temperature DP value of `1000` is sent
 
 #### Scenario: Reverse the temperature axis
 - **WHEN** the reverse toggle is enabled
@@ -40,7 +44,7 @@ The light SHALL choose the RGB-prefixed color format when its cached color strin
 
 ### Requirement: Scene and music commands
 
-The light SHALL select the RGBW 255 scene table for scene DP IDs below `20`, RGB 1000 when the ID is at least `20` and brightness is not mapped, and RGBW 1000 otherwise. A scene value beginning with `scene` SHALL be written directly to the mode DP; other known scenes SHALL set mode `scene` and write the scene data separately.
+The light SHALL publish the configured scene/effect names as a list. It SHALL select the RGBW 255 scene table for scene DP IDs below `20`, RGB 1000 when the ID is at least `20` and brightness is not mapped, and RGBW 1000 otherwise. A scene value beginning with `scene` SHALL be written directly to the mode DP; other known scenes SHALL set mode `scene` and write the scene data separately.
 
 #### Scenario: Select a stored scenario
 - **WHEN** `Scenario 1` is requested using the RGBW 255 table
@@ -51,5 +55,5 @@ The light SHALL select the RGBW 255 scene table for scene DP IDs below `20`, RGB
 - **THEN** the current effect is `Custom`
 
 #### Scenario: Use dedicated music mode
-- **WHEN** EFFECT is supported and a `Music` effect request does not match an entry in the selected scene table
+- **WHEN** music mode is enabled and a `Music` effect request does not match an entry in the selected scene table
 - **THEN** `music` is written to the mode DP

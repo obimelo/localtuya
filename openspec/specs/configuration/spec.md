@@ -15,6 +15,10 @@ The config flow SHALL accept region `eu`, `us`, `cn`, or `in` (default `eu`), cl
 - **THEN** client ID, client secret and user ID are stored as empty strings without testing cloud credentials
 - **AND** a reconfiguration preserves the device map
 
+#### Scenario: Render the cloud form on Core 2026.11
+- **WHEN** the platform supports conditional form fields
+- **THEN** region and cloud credentials are shown only when cloud setup is enabled
+
 #### Scenario: Submit cloud credentials
 - **WHEN** cloud is enabled and credentials are submitted
 - **THEN** the flow tests token acquisition and device listing in order
@@ -26,7 +30,11 @@ The config flow SHALL accept region `eu`, `us`, `cn`, or `in` (default `eu`), cl
 
 ### Requirement: Add-device selection and validation
 
-Adding a device SHALL use the running discovery cache when available or fall back to a short discovery run. The chooser SHALL omit discovered IDs already in the current entry and offer `...` for manual entry. Device settings SHALL include friendly name, host, ID, local key, version `3.1`–`3.4` (default `3.3`), debug flag (default false), optional integer scan interval, and optional comma-separated manual and reset DPs.
+Adding a device SHALL use the running discovery cache when available or fall back to a short discovery run. The chooser SHALL omit configured IDs and offer `...` for manual entry. Device settings SHALL include friendly name, host, ID, local key, version `3.1`–`3.4` (default `3.3`), debug flag (default false), optional integer scan interval, and optional comma-separated manual and reset DPs.
+
+#### Scenario: Enter a device ID that already has an owning entry
+- **WHEN** the manual form submits an ID already configured under any LocalTuya entry
+- **THEN** the flow aborts with `already_configured` without overwriting or duplicating the device
 
 #### Scenario: Choose a discovered device
 - **WHEN** a user selects a broadcast device
@@ -59,9 +67,29 @@ The flow SHALL support `binary_sensor`, `climate`, `cover`, `fan`, `light`, `num
 - **WHEN** the last available primary DP has been bound
 - **THEN** the add flow saves without asking for another platform
 
+### Requirement: Group entities on the device page
+
+The flow SHALL offer a **Device page section** choice of Controls or Configuration for writable entities during creation and editing. The runtime SHALL register Configuration selections with Home Assistant's `config` entity category. Other entities SHALL remain uncategorized so Home Assistant places sensors and binary sensors under Sensors and writable platforms under Controls. Existing entities without a selection keep their default grouping.
+
+#### Scenario: Move a backlight switch to Configuration
+- **WHEN** an existing switch is edited and its section is set to Configuration
+- **THEN** the reloaded entity has the `config` category and keeps its entity ID, platform, and DP binding
+
+#### Scenario: Move a setting back to Controls
+- **WHEN** the same switch is edited and Controls is selected
+- **THEN** the reloaded entity no longer has the `config` category
+
+#### Scenario: Configure a read-only sensor
+- **WHEN** a sensor or binary sensor is configured
+- **THEN** the form does not offer a section override and Home Assistant lists it under Sensors
+
 ### Requirement: Edit existing device and entity settings
 
-Editing SHALL select from devices in the current entry, preserve the device ID, and use saved DP labels (or `1`–`255` with `?` values if absent). A different cached cloud key SHALL be offered as the default. The normal edit path SHALL retain only selected entities and preserve their primary IDs and platforms; it removes matching registry entries before saving so retained entities are recreated.
+Editing SHALL select from devices in the current entry, preserve the device ID, and use saved DP labels (or `1`–`255` with `?` values if absent). A different cached cloud key SHALL be offered as the default. The normal edit path SHALL keep selected entities' primary IDs, platforms, and registry records, and remove only the records for explicitly discarded entities.
+
+#### Scenario: An entity has a custom Home Assistant name or ID
+- **WHEN** that entity is retained during a device edit
+- **THEN** its user-customized name and entity ID survive the reload
 
 #### Scenario: Edit two retained entities
 - **WHEN** two existing entities are selected for normal edit

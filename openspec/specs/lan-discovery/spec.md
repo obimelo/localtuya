@@ -16,7 +16,7 @@ Discovery SHALL listen on IPv4 UDP ports `6666` and `6667` with port reuse. It S
 
 ### Requirement: Discovery lifetime and address reconciliation
 
-Integration discovery SHALL run until Home Assistant stops; inability to start it is logged and does not by itself stop integration setup. The standalone discovery helper SHALL listen for six seconds and close its listeners in `finally`. Runtime reconciliation SHALL ignore unconfigured IDs; for configured IDs, a changed `ip` or `productKey` SHALL update entry data. An announcement for a configured disconnected wrapper SHALL request reconnection; an entry update can also trigger a reload.
+Integration discovery SHALL run until Home Assistant stops; inability to start it is logged and does not by itself stop integration setup. Standalone discovery SHALL listen for six seconds and close its listeners in `finally`. Reconciliation SHALL ignore unconfigured IDs. A changed `ip` or `productKey` SHALL update the entry and trigger reload; otherwise an announcement for a configured disconnected device SHALL request reconnection.
 
 #### Scenario: Device changes IP after DHCP renewal
 - **WHEN** a configured ID broadcasts a different address

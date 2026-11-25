@@ -113,6 +113,7 @@
                 "title": "Configurar entidade",
                 "description": "Por favor, preencha os detalhes de {entity} com o tipo `{platform}`. Todas as configurações, exceto `ID`, podem ser alteradas na página Opções posteriormente.",
                 "data": {
+                    "entity_section": "Seção da página do dispositivo",
                     "id": "ID",
                     "friendly_name": "Nome fantasia",
                     "current": "Atual",
@@ -209,6 +210,14 @@
                     "name": "Value",
                     "description": "New value to set"
                 }
+            }
+        }
+    },
+    "selector": {
+        "entity_section": {
+            "options": {
+                "control": "Controles",
+                "config": "Configuração"
             }
         }
     },

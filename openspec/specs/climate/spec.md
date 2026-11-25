@@ -8,7 +8,7 @@ Map heating, thermostat, and air conditioning datapoints onto Home Assistant cli
 
 ### Requirement: Report and set configured temperature values
 
-The climate entity SHALL report Celsius by default or Fahrenheit when configured. It SHALL multiply current and target readings by their respective precision and divide an outgoing target by target precision, rounding to an integer. Minimum and maximum SHALL come from configured bound DPs as-is or the configured constants.
+The climate entity SHALL report device-native Celsius by default or Fahrenheit when configured, using Core 2026.11 native temperature properties where available. It SHALL multiply current and target readings by their respective precision and divide an outgoing target by target precision, rounding to an integer. Minimum and maximum SHALL come from configured bound DPs as-is or the configured constants.
 
 #### Scenario: Control a half-degree thermostat
 - **WHEN** target precision is `0.5` and the user sets `21.5`

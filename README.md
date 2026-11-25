@@ -26,7 +26,9 @@ This repository's development began as code from [@NameLessJedi](https://github.
 
 # Installation:
 
-The easiest way, if you are using [HACS](https://hacs.xyz/), is to install LocalTuya through HACS.
+On Home Assistant 2026.11 and newer, use **Settings → Marketplace**. If this repository is not listed, select **Add from link** and enter its repository URL. On earlier supported Home Assistant releases, use [HACS](https://hacs.xyz/).
+
+The minimum supported version is Home Assistant Core 2025.11.3. This checkout is tested against 2025.11.3 and 2026.11.3. Existing LocalTuya configuration and entity IDs are retained. Dashboard labels may look different after [Home Assistant's 2026.11 naming update](https://www.home-assistant.io/blog/2026/11/03/naming-things-in-home-assistant/).
 
 For manual installation, copy the localtuya folder and all of its contents into your Home Assistant's custom_components folder. This folder is usually inside your `/config` folder. If you are running Hass.io, use SAMBA to copy the folder over. If you are running Home Assistant Supervised, the custom_components folder might be located at `/usr/share/hassio/homeassistant`. You may need to create the `custom_components` folder and then copy the localtuya folder and all of its contents into it.
 
@@ -115,6 +117,12 @@ Each entity type has different options to be configured. Here is an example for 
 
 ![entity](https://github.com/rospogrigio/localtuya-homeassistant/blob/master/img/4-entity.png)
 
+#### Device page sections
+
+Home Assistant shows Sensor and Binary Sensor entities under **Sensors**. For a writable entity, **Device page section** defaults to **Controls** and can be changed to **Configuration** for device settings such as a curtain controller's backlight.
+
+To move an existing switch, use **LocalTuya → Configure → Edit a device**. Keep all the entities you want to retain selected, then choose **Configuration** on the switch's form. This does not change its entity ID or datapoint.
+
 Once you configure the entities, the procedure is complete. You can now associate the device with an Area in Home Assistant
 
 ![success](https://github.com/rospogrigio/localtuya-homeassistant/blob/master/img/5-success.png)
@@ -198,6 +206,8 @@ Then, edit the device that is showing problems and check the "Enable debugging f
 # Development specifications
 
 The [OpenSpec baseline](openspec/README.md) documents the behavior of this checkout, including configuration, LAN communication, all entity platforms, and known implementation gaps.
+
+Run the compatibility tests in a Python environment with the target Home Assistant Core installed: `python -m unittest discover -s tests -v`. The CI matrix uses official Home Assistant images and does not require a cloud account or physical devices.
 
 # Notes:
 

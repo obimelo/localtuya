@@ -36,6 +36,10 @@ CONF_PRODUCT_KEY = "product_key"
 CONF_PRODUCT_NAME = "product_name"
 CONF_USER_ID = "user_id"
 CONF_ENABLE_ADD_ENTITIES = "add_entities"
+CONF_ENTITY_SECTION = "entity_section"
+ENTITY_SECTION_CONTROL = "control"
+ENTITY_SECTION_CONFIG = "config"
+SENSOR_PLATFORMS = frozenset({"binary_sensor", "sensor"})
 
 
 CONF_ACTION = "action"

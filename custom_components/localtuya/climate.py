@@ -274,8 +274,8 @@ class LocaltuyaClimate(LocalTuyaEntity, ClimateEntity):
         return self._target_precision
 
     @property
-    def temperature_unit(self):
-        """Return the unit of measurement used by the platform."""
+    def native_temperature_unit(self):
+        """Return the temperature unit used by the device."""
         if (
             self._config.get(CONF_TEMPERATURE_UNIT, DEFAULT_TEMPERATURE_UNIT)
             == TEMPERATURE_FAHRENHEIT
@@ -337,12 +337,12 @@ class LocaltuyaClimate(LocalTuyaEntity, ClimateEntity):
         return presets
 
     @property
-    def current_temperature(self):
+    def native_current_temperature(self):
         """Return the current temperature."""
         return self._current_temperature
 
     @property
-    def target_temperature(self):
+    def native_target_temperature(self):
         """Return the temperature we try to reach."""
         return self._target_temperature
 
@@ -350,6 +350,12 @@ class LocaltuyaClimate(LocalTuyaEntity, ClimateEntity):
     def target_temperature_step(self):
         """Return the supported step of target temperature."""
         return self._config.get(CONF_TEMPERATURE_STEP, DEFAULT_TEMPERATURE_STEP)
+
+    # Before Core 2026.11 the base class reads these names directly.
+    if not hasattr(ClimateEntity, "native_temperature_unit"):
+        temperature_unit = native_temperature_unit
+        current_temperature = native_current_temperature
+        target_temperature = native_target_temperature
 
     @property
     def fan_mode(self):

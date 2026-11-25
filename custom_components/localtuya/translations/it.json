@@ -113,6 +113,7 @@
                 "title": "Configurare entity",
                 "description": "Compila i dettagli per {entity} con tipo `{platform}`.Tutte le impostazioni ad eccezione di `id` possono essere modificate dalla pagina delle opzioni in seguito.",
                 "data": {
+                    "entity_section": "Sezione della pagina del dispositivo",
                     "id": "ID",
                     "friendly_name": "Nome amichevole",
                     "current": "Corrente",
@@ -209,6 +210,14 @@
                     "name": "Value",
                     "description": "New value to set"
                 }
+            }
+        }
+    },
+    "selector": {
+        "entity_section": {
+            "options": {
+                "control": "Controlli",
+                "config": "Configurazione"
             }
         }
     },

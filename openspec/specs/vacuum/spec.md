@@ -16,7 +16,7 @@ The vacuum SHALL compare the string form of the primary status DP to comma-separ
 
 ### Requirement: Expose optional vacuum telemetry
 
-Configured DPs SHALL provide battery and cleaning telemetry (`clean_time`, `clean_area`, `clean_record`, and `fault`). Cleaning modes default to `smart,wall_follow,spiral,single`; fan speeds default to `low,normal,high`. The reported mode and fan speed use their configured DPs.
+Configured DPs SHALL provide battery and cleaning telemetry (`battery_level`, `clean_time`, `clean_area`, `clean_record`, and `fault`). Battery is an extra attribute, not a vacuum feature flag. Cleaning modes default to `smart,wall_follow,spiral,single`; fan speeds default to `low,normal,high`. The reported mode and fan speed use their configured DPs.
 
 #### Scenario: Publish a cleaning cycle's metadata
 - **WHEN** clean time and area DPs are configured and report values
@@ -31,6 +31,6 @@ Start and pause SHALL write `true` and `false` to the required `powergo_dp`. Ret
 - **THEN** the mode DP receives `chargego`
 
 #### Scenario: Advertise optional vacuum controls
-- **WHEN** a vacuum has mappings for fan speed, battery and locate
-- **THEN** those features are added to the base start, pause, stop, status and state feature set
-- **AND** return-home is enabled based on the return token, not a check for the mode DP
+- **WHEN** a vacuum has mappings for fan speed and locate
+- **THEN** those features are added to the base start, pause and state feature set
+- **AND** mode commands require the mode DP; return and stop additionally require their respective tokens

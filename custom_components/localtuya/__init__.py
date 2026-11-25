@@ -30,7 +30,7 @@ from homeassistant.helpers.service import async_register_admin_service
 
 from .cloud_api import TuyaCloudApi
 from .common import TuyaDevice, async_config_entry_by_device_id
-from .config_flow import ENTRIES_VERSION, config_schema
+from .config_flow import ENTRIES_VERSION
 from .const import (
     ATTR_UPDATED_AT,
     CONF_NO_CLOUD,
@@ -45,11 +45,9 @@ from .discovery import TuyaDiscovery
 
 _LOGGER = logging.getLogger(__name__)
 
-UNSUB_LISTENER = "unsub_listener"
-
 RECONNECT_INTERVAL = timedelta(seconds=60)
 
-CONFIG_SCHEMA = config_schema()
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 CONF_DP = "dp"
 CONF_VALUE = "value"
@@ -119,30 +117,30 @@ async def async_setup(hass: HomeAssistant, config: dict):
 
         dev_entry = entry.data[CONF_DEVICES][device_id]
 
-        new_data = entry.data.copy()
-        updated = False
-
-        if device_cache[device_id] != device_ip:
-            updated = True
-            new_data[CONF_DEVICES][device_id][CONF_HOST] = device_ip
-            device_cache[device_id] = device_ip
-
-        if dev_entry.get(CONF_PRODUCT_KEY) != product_key:
-            updated = True
-            new_data[CONF_DEVICES][device_id][CONF_PRODUCT_KEY] = product_key
-
-        # Update settings if something changed, otherwise try to connect. Updating
-        # settings triggers a reload of the config entry, which tears down the device
-        # so no need to connect in that case.
-        if updated:
+        if (
+            device_cache[device_id] != device_ip
+            or dev_entry.get(CONF_PRODUCT_KEY) != product_key
+        ):
             _LOGGER.debug(
                 "Updating keys for device %s: %s %s", device_id, device_ip, product_key
             )
-            new_data[ATTR_UPDATED_AT] = str(int(time.time() * 1000))
-            hass.config_entries.async_update_entry(entry, data=new_data)
-
-        elif device_id in hass.data[DOMAIN][TUYA_DEVICES]:
-            _LOGGER.debug("Device %s found with IP %s", device_id, device_ip)
+            device_cache[device_id] = device_ip
+            hass.config_entries.async_update_entry(
+                entry,
+                data={
+                    **entry.data,
+                    CONF_DEVICES: {
+                        **entry.data[CONF_DEVICES],
+                        device_id: {
+                            **dev_entry,
+                            CONF_HOST: device_ip,
+                            CONF_PRODUCT_KEY: product_key,
+                        },
+                    },
+                    ATTR_UPDATED_AT: str(int(time.time() * 1000)),
+                },
+            )
+            return  # The entry update triggers a reload.
 
         device = hass.data[DOMAIN][TUYA_DEVICES].get(device_id)
         if not device:
@@ -207,18 +205,18 @@ async def async_migrate_entry(hass, config_entry: ConfigEntry):
                 config_entry.data[CONF_DEVICE_ID]: config_entry.data.copy()
             }
             new_data[ATTR_UPDATED_AT] = str(int(time.time() * 1000))
-            config_entry.version = new_version
             hass.config_entries.async_update_entry(
-                config_entry, title=DOMAIN, data=new_data
+                config_entry, title=DOMAIN, data=new_data, version=new_version
             )
         else:
             _LOGGER.debug(
                 "Merging the config entry %s into the main one", config_entry.entry_id
             )
             new_data = stored_entries[0].data.copy()
-            new_data[CONF_DEVICES].update(
-                {config_entry.data[CONF_DEVICE_ID]: config_entry.data.copy()}
-            )
+            new_data[CONF_DEVICES] = {
+                **new_data[CONF_DEVICES],
+                config_entry.data[CONF_DEVICE_ID]: config_entry.data.copy(),
+            }
             new_data[ATTR_UPDATED_AT] = str(int(time.time() * 1000))
             hass.config_entries.async_update_entry(stored_entries[0], data=new_data)
             await hass.config_entries.async_remove(config_entry.entry_id)
@@ -240,7 +238,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             entry.entry_id,
             entry.version,
         )
-        return
+        return False
 
     region = entry.data[CONF_REGION]
     client_id = entry.data[CONF_CLIENT_ID]
@@ -264,55 +262,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data[DOMAIN][DATA_CLOUD] = tuya_api
 
     platforms = set()
-    for dev_id in entry.data[CONF_DEVICES].keys():
+    devices = {}
+    for dev_id in entry.data[CONF_DEVICES]:
         entities = entry.data[CONF_DEVICES][dev_id][CONF_ENTITIES]
         platforms = platforms.union(
             set(entity[CONF_PLATFORM] for entity in entities)
         )
-        hass.data[DOMAIN][TUYA_DEVICES][dev_id] = TuyaDevice(hass, entry, dev_id)
+        devices[dev_id] = TuyaDevice(hass, entry, dev_id)
+    hass.data[DOMAIN][TUYA_DEVICES].update(devices)
 
     # Setup all platforms at once, letting HA handling each platform and avoiding
     # potential integration restarts while elements are still initialising.
     await hass.config_entries.async_forward_entry_setups(entry, platforms)
 
-    async def setup_entities(device_ids):
-        for dev_id in device_ids:
-            hass.data[DOMAIN][TUYA_DEVICES][dev_id].async_connect()
-
-        await async_remove_orphan_entities(hass, entry)
-
-    hass.async_create_task(setup_entities(entry.data[CONF_DEVICES].keys()))
-
-    unsub_listener = entry.add_update_listener(update_listener)
-    hass.data[DOMAIN][entry.entry_id] = {UNSUB_LISTENER: unsub_listener}
+    hass.data[DOMAIN][entry.entry_id] = (platforms, devices)
+    entry.async_on_unload(entry.add_update_listener(update_listener))
+    for device in devices.values():
+        device.async_connect()
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Unload a config entry."""
-    platforms = {}
+    domain_data = hass.data[DOMAIN]
+    platforms, devices = domain_data[entry.entry_id]
+    if not await hass.config_entries.async_unload_platforms(entry, platforms):
+        return False
 
-    for dev_id, dev_entry in entry.data[CONF_DEVICES].items():
-        for entity in dev_entry[CONF_ENTITIES]:
-            platforms[entity[CONF_PLATFORM]] = True
-
-    unload_ok = all(
-        await asyncio.gather(
-            *[
-                hass.config_entries.async_forward_entry_unload(entry, component)
-                for component in platforms
-            ]
-        )
-    )
-
-    hass.data[DOMAIN][entry.entry_id][UNSUB_LISTENER]()
-    for dev_id, device in hass.data[DOMAIN][TUYA_DEVICES].items():
-        if device.connected:
-            await device.close()
-
-    if unload_ok:
-        hass.data[DOMAIN][TUYA_DEVICES] = {}
+    for dev_id, device in devices.items():
+        await device.close()
+        if domain_data[TUYA_DEVICES].get(dev_id) is device:
+            domain_data[TUYA_DEVICES].pop(dev_id)
+    domain_data.pop(entry.entry_id)
 
     return True
 
@@ -326,13 +308,22 @@ async def async_remove_config_entry_device(
     hass: HomeAssistant, config_entry: ConfigEntry, device_entry: DeviceEntry
 ) -> bool:
     """Remove a config entry from a device."""
-    dev_id = list(device_entry.identifiers)[0][1].split("_")[-1]
+    dev_id = next(
+        (
+            identifier.removeprefix("local_")
+            for domain, identifier in device_entry.identifiers
+            if domain == DOMAIN and identifier.startswith("local_")
+        ),
+        None,
+    )
+    if dev_id is None:
+        return False
 
     ent_reg = er.async_get(hass)
     entities = {
         ent.unique_id: ent.entity_id
         for ent in er.async_entries_for_config_entry(ent_reg, config_entry.entry_id)
-        if dev_id in ent.unique_id
+        if ent.unique_id.rpartition("_")[0] == f"local_{dev_id}"
     }
     for entity_id in entities.values():
         ent_reg.async_remove(entity_id)
@@ -343,10 +334,10 @@ async def async_remove_config_entry_device(
         )
         return True
 
-    await hass.data[DOMAIN][TUYA_DEVICES][dev_id].close()
-
     new_data = config_entry.data.copy()
-    new_data[CONF_DEVICES].pop(dev_id)
+    new_data[CONF_DEVICES] = {
+        key: value for key, value in new_data[CONF_DEVICES].items() if key != dev_id
+    }
     new_data[ATTR_UPDATED_AT] = str(int(time.time() * 1000))
 
     hass.config_entries.async_update_entry(
@@ -357,22 +348,3 @@ async def async_remove_config_entry_device(
     _LOGGER.info("Device %s removed.", dev_id)
 
     return True
-
-
-async def async_remove_orphan_entities(hass, entry):
-    """Remove entities associated with config entry that has been removed."""
-    return
-    ent_reg = er.async_get(hass)
-    entities = {
-        ent.unique_id: ent.entity_id
-        for ent in er.async_entries_for_config_entry(ent_reg, entry.entry_id)
-    }
-    _LOGGER.info("ENTITIES ORPHAN %s", entities)
-    return
-
-    for entity in entry.data[CONF_ENTITIES]:
-        if entity[CONF_ID] in entities:
-            del entities[entity[CONF_ID]]
-
-    for entity_id in entities.values():
-        ent_reg.async_remove(entity_id)

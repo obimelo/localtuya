@@ -20,7 +20,7 @@ LocalTuya SHALL expose the `localtuya` domain as a `local_push` integration with
 
 ### Requirement: Legacy entry migration
 
-Version 1 entries SHALL be consolidated under the first entry. The first becomes version 2 with title `localtuya`, region `eu`, cloud disabled, blank client ID, client secret and user ID, and the old device data under `devices[device_id]`. Subsequent legacy entries SHALL contribute their device data and be removed. New YAML imports are not supported even though a schema remains; they SHALL log the unsupported-configuration message rather than create entries.
+Version 1 entries SHALL be consolidated under the first entry. The first becomes version 2 with title `localtuya`, region `eu`, cloud disabled, blank client ID, client secret and user ID, and the old device data under `devices[device_id]`. Subsequent legacy entries SHALL contribute their device data and be removed. Home Assistant's config-entry-only schema SHALL flag new YAML configuration rather than create entries.
 
 #### Scenario: Upgrade multiple version 1 entries
 - **WHEN** the first legacy entry is migrated and the others are merged
@@ -28,7 +28,12 @@ Version 1 entries SHALL be consolidated under the first entry. The first becomes
 
 ### Requirement: Unload and device removal
 
-Entry unload SHALL request unload of the configured platforms, unsubscribe the update listener, and close connected device wrappers. The runtime device map is cleared if all platform unloads succeed. Device removal SHALL remove matching entity registry entries, close the configured device if present, and remove its config from the entry so it is not recreated on reload.
+Entry unload SHALL request unload of the platforms actually loaded for that entry. If unload succeeds, it SHALL close and remove only that entry's wrappers, and Home Assistant SHALL unsubscribe the entry's update listener. Device removal SHALL delete matching registry records and remove the device configuration before reloading.
+
+#### Scenario: Editing removes the last entity of a platform
+- **WHEN** entry data changes before reload
+- **THEN** the old platform is still unloaded using the loaded-platform snapshot
+- **AND** a failed platform unload is reported rather than treated as success
 
 #### Scenario: Remove one configured device
 - **WHEN** Home Assistant invokes device removal

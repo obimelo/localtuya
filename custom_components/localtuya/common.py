@@ -3,6 +3,7 @@ import asyncio
 import json.decoder
 import logging
 import time
+from contextlib import suppress
 from datetime import timedelta
 
 from homeassistant.const import (
@@ -17,10 +18,12 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import callback
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import (
     async_dispatcher_connect,
     async_dispatcher_send,
 )
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.restore_state import RestoreEntity
 
@@ -30,6 +33,7 @@ from .const import (
     ATTR_UPDATED_AT,
     CONF_DEFAULT_VALUE,
     CONF_ENABLE_DEBUG,
+    CONF_ENTITY_SECTION,
     CONF_LOCAL_KEY,
     CONF_MODEL,
     CONF_PASSIVE_ENTITY,
@@ -38,6 +42,8 @@ from .const import (
     CONF_RESTORE_ON_RECONNECT,
     DATA_CLOUD,
     DOMAIN,
+    ENTITY_SECTION_CONFIG,
+    SENSOR_PLATFORMS,
     TUYA_DEVICES,
 )
 
@@ -68,11 +74,9 @@ async def async_setup_entry(
     entity_class with functools.partial.
     """
     entities = []
+    dps_config_fields = tuple(get_dps_for_platform(flow_schema))
 
     for dev_id in config_entry.data[CONF_DEVICES]:
-        # entities_to_setup = prepare_setup_entities(
-        #     hass, config_entry.data[dev_id], domain
-        # )
         dev_entry = config_entry.data[CONF_DEVICES][dev_id]
         entities_to_setup = [
             entity
@@ -81,26 +85,23 @@ async def async_setup_entry(
         ]
 
         if entities_to_setup:
-
             tuyainterface = hass.data[DOMAIN][TUYA_DEVICES][dev_id]
-
-            dps_config_fields = list(get_dps_for_platform(flow_schema))
-
+            device_entities = []
             for entity_config in entities_to_setup:
                 # Add DPS used by this platform to the request list
                 for dp_conf in dps_config_fields:
                     if dp_conf in entity_config:
                         tuyainterface.dps_to_request[entity_config[dp_conf]] = None
 
-                entities.append(
+                device_entities.append(
                     entity_class(
                         tuyainterface,
                         dev_entry,
                         entity_config[CONF_ID],
                     )
                 )
-    # Once the entities have been created, add to the TuyaDevice instance
-    tuyainterface.add_entities(entities)
+            tuyainterface.add_entities(device_entities)
+            entities.extend(device_entities)
     async_add_entities(entities)
 
 
@@ -289,7 +290,13 @@ class TuyaDevice(pytuya.TuyaListener, pytuya.ContextualLogger):
         if dev_id in cloud_devs:
             self._local_key = cloud_devs[dev_id].get(CONF_LOCAL_KEY)
             new_data = self._config_entry.data.copy()
-            new_data[CONF_DEVICES][dev_id][CONF_LOCAL_KEY] = self._local_key
+            new_data[CONF_DEVICES] = {
+                **new_data[CONF_DEVICES],
+                dev_id: {
+                    **new_data[CONF_DEVICES][dev_id],
+                    CONF_LOCAL_KEY: self._local_key,
+                },
+            }
             new_data[ATTR_UPDATED_AT] = str(int(time.time() * 1000))
             self._hass.config_entries.async_update_entry(
                 self._config_entry,
@@ -304,13 +311,19 @@ class TuyaDevice(pytuya.TuyaListener, pytuya.ContextualLogger):
     async def close(self):
         """Close connection and stop re-connect loop."""
         self._is_closing = True
-        if self._connect_task is not None:
-            self._connect_task.cancel()
-            await self._connect_task
+        if (task := self._connect_task) is not None:
+            self._connect_task = None
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
         if self._interface is not None:
             await self._interface.close()
         if self._disconnect_task is not None:
             self._disconnect_task()
+            self._disconnect_task = None
+        if self._unsub_interval is not None:
+            self._unsub_interval()
+            self._unsub_interval = None
         self.info(
             "Closed connection with device %s.",
             self._dev_config_entry[CONF_FRIENDLY_NAME],
@@ -358,6 +371,9 @@ class TuyaDevice(pytuya.TuyaListener, pytuya.ContextualLogger):
         if self._unsub_interval is not None:
             self._unsub_interval()
             self._unsub_interval = None
+        if self._disconnect_task is not None:
+            self._disconnect_task()
+            self._disconnect_task = None
         self._interface = None
 
         if self._connect_task is not None:
@@ -375,6 +391,11 @@ class LocalTuyaEntity(RestoreEntity, pytuya.ContextualLogger):
         self._device = device
         self._dev_config_entry = config_entry
         self._config = get_entity_config(config_entry, dp_id)
+        if (
+            self._config.get(CONF_ENTITY_SECTION) == ENTITY_SECTION_CONFIG
+            and self._config.get(CONF_PLATFORM) not in SENSOR_PLATFORMS
+        ):
+            self._attr_entity_category = EntityCategory.CONFIG
         self._dp_id = dp_id
         self._status = {}
         self._state = None
@@ -444,16 +465,14 @@ class LocalTuyaEntity(RestoreEntity, pytuya.ContextualLogger):
     def device_info(self):
         """Return device information for the device registry."""
         model = self._dev_config_entry.get(CONF_MODEL, "Tuya generic")
-        return {
-            "identifiers": {
-                # Serial numbers are unique identifiers within a specific domain
-                (DOMAIN, f"local_{self._dev_config_entry[CONF_DEVICE_ID]}")
-            },
-            "name": self._dev_config_entry[CONF_FRIENDLY_NAME],
-            "manufacturer": "Tuya",
-            "model": f"{model} ({self._dev_config_entry[CONF_DEVICE_ID]})",
-            "sw_version": self._dev_config_entry[CONF_PROTOCOL_VERSION],
-        }
+        device_id = self._dev_config_entry[CONF_DEVICE_ID]
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"local_{device_id}")},
+            name=self._dev_config_entry[CONF_FRIENDLY_NAME],
+            manufacturer="Tuya",
+            model=f"{model} ({device_id})",
+            sw_version=self._dev_config_entry[CONF_PROTOCOL_VERSION],
+        )
 
     @property
     def name(self):

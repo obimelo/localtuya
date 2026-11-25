@@ -79,8 +79,7 @@ class LocaltuyaVacuum(LocalTuyaEntity, StateVacuumEntity):
     def __init__(self, device, config_entry, switchid, **kwargs):
         """Initialize a new LocaltuyaVacuum."""
         super().__init__(device, config_entry, switchid, _LOGGER, **kwargs)
-        self._state = None
-        self._battery_level = None
+        self._activity = None
         self._attrs = {}
 
         self._idle_status_list = []
@@ -110,31 +109,26 @@ class LocaltuyaVacuum(LocalTuyaEntity, StateVacuumEntity):
         supported_features = (
             VacuumEntityFeature.START
             | VacuumEntityFeature.PAUSE
-            | VacuumEntityFeature.STOP
-            | VacuumEntityFeature.STATUS
             | VacuumEntityFeature.STATE
         )
 
-        if self.has_config(CONF_RETURN_MODE):
-            supported_features = supported_features | VacuumEntityFeature.RETURN_HOME
+        if self.has_config(CONF_MODE_DP):
+            supported_features |= VacuumEntityFeature.SEND_COMMAND
+            if self.has_config(CONF_RETURN_MODE):
+                supported_features |= VacuumEntityFeature.RETURN_HOME
+            if self.has_config(CONF_STOP_STATUS):
+                supported_features |= VacuumEntityFeature.STOP
         if self.has_config(CONF_FAN_SPEED_DP):
             supported_features = supported_features | VacuumEntityFeature.FAN_SPEED
-        if self.has_config(CONF_BATTERY_DP):
-            supported_features = supported_features | VacuumEntityFeature.BATTERY
         if self.has_config(CONF_LOCATE_DP):
             supported_features = supported_features | VacuumEntityFeature.LOCATE
 
         return supported_features
 
     @property
-    def state(self):
-        """Return the vacuum state."""
-        return self._state
-
-    @property
-    def battery_level(self):
-        """Return the current battery level."""
-        return self._battery_level
+    def activity(self):
+        """Return the vacuum activity used by Home Assistant for its state."""
+        return self._activity
 
     @property
     def extra_state_attributes(self):
@@ -161,7 +155,7 @@ class LocaltuyaVacuum(LocalTuyaEntity, StateVacuumEntity):
 
     async def async_return_to_base(self, **kwargs):
         """Set the vacuum cleaner to return to the dock."""
-        if self.has_config(CONF_RETURN_MODE):
+        if self.has_config(CONF_RETURN_MODE) and self.has_config(CONF_MODE_DP):
             await self._device.set_dp(
                 self._config[CONF_RETURN_MODE], self._config[CONF_MODE_DP]
             )
@@ -170,7 +164,7 @@ class LocaltuyaVacuum(LocalTuyaEntity, StateVacuumEntity):
 
     async def async_stop(self, **kwargs):
         """Turn the vacuum off stopping the cleaning."""
-        if self.has_config(CONF_STOP_STATUS):
+        if self.has_config(CONF_STOP_STATUS) and self.has_config(CONF_MODE_DP):
             await self._device.set_dp(
                 self._config[CONF_STOP_STATUS], self._config[CONF_MODE_DP]
             )
@@ -192,7 +186,12 @@ class LocaltuyaVacuum(LocalTuyaEntity, StateVacuumEntity):
 
     async def async_send_command(self, command, params=None, **kwargs):
         """Send a command to a vacuum cleaner."""
-        if command == "set_mode" and "mode" in params:
+        if (
+            command == "set_mode"
+            and params
+            and "mode" in params
+            and self.has_config(CONF_MODE_DP)
+        ):
             mode = params["mode"]
             await self._device.set_dp(mode, self._config[CONF_MODE_DP])
 
@@ -201,18 +200,18 @@ class LocaltuyaVacuum(LocalTuyaEntity, StateVacuumEntity):
         state_value = str(self.dps(self._dp_id))
 
         if state_value in self._idle_status_list:
-            self._state = VacuumActivity.IDLE
+            self._activity = VacuumActivity.IDLE
         elif state_value in self._docked_status_list:
-            self._state = VacuumActivity.DOCKED
+            self._activity = VacuumActivity.DOCKED
         elif state_value == self._config[CONF_RETURNING_STATUS_VALUE]:
-            self._state = VacuumActivity.RETURNING
+            self._activity = VacuumActivity.RETURNING
         elif state_value == self._config[CONF_PAUSED_STATE]:
-            self._state = VacuumActivity.PAUSED
+            self._activity = VacuumActivity.PAUSED
         else:
-            self._state = VacuumActivity.CLEANING
+            self._activity = VacuumActivity.CLEANING
 
         if self.has_config(CONF_BATTERY_DP):
-            self._battery_level = self.dps_conf(CONF_BATTERY_DP)
+            self._attrs["battery_level"] = self.dps_conf(CONF_BATTERY_DP)
 
         self._cleaning_mode = ""
         if self.has_config(CONF_MODES):
@@ -235,7 +234,7 @@ class LocaltuyaVacuum(LocalTuyaEntity, StateVacuumEntity):
         if self.has_config(CONF_FAULT_DP):
             self._attrs[FAULT] = self.dps_conf(CONF_FAULT_DP)
             if self._attrs[FAULT] != 0:
-                self._state = VacuumActivity.ERROR
+                self._activity = VacuumActivity.ERROR
 
 
 async_setup_entry = partial(async_setup_entry, DOMAIN, LocaltuyaVacuum, flow_schema)

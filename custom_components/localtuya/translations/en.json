@@ -122,6 +122,7 @@
                 "title": "Configure entity",
                 "description": "Please fill out the details for {entity} with type `{platform}`. All settings except for `ID` can be changed from the Options page later.",
                 "data": {
+                    "entity_section": "Device page section",
                     "id": "ID",
                     "friendly_name": "Friendly name",
                     "current": "Current",
@@ -231,6 +232,14 @@
                     "name": "Value",
                     "description": "New value to set"
                 }
+            }
+        }
+    },
+    "selector": {
+        "entity_section": {
+            "options": {
+                "control": "Controls",
+                "config": "Configuration"
             }
         }
     },

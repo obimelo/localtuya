@@ -2,12 +2,13 @@
 import errno
 import logging
 import time
+from copy import copy
 from importlib import import_module
 
 import homeassistant.helpers.config_validation as cv
 import homeassistant.helpers.entity_registry as er
 import voluptuous as vol
-from homeassistant import config_entries, core, exceptions
+from homeassistant import config_entries, core, data_entry_flow, exceptions
 from homeassistant.const import (
     CONF_CLIENT_ID,
     CONF_CLIENT_SECRET,
@@ -24,9 +25,10 @@ from homeassistant.const import (
     CONF_USERNAME,
 )
 from homeassistant.core import callback
+from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig
 
 from .cloud_api import TuyaCloudApi
-from .common import pytuya
+from .common import async_config_entry_by_device_id, pytuya
 from .const import (
     ATTR_UPDATED_AT,
     CONF_ACTION,
@@ -34,6 +36,7 @@ from .const import (
     CONF_DPS_STRINGS,
     CONF_EDIT_DEVICE,
     CONF_ENABLE_DEBUG,
+    CONF_ENTITY_SECTION,
     CONF_LOCAL_KEY,
     CONF_MANUAL_DPS,
     CONF_MODEL,
@@ -47,7 +50,10 @@ from .const import (
     DATA_CLOUD,
     DATA_DISCOVERY,
     DOMAIN,
+    ENTITY_SECTION_CONFIG,
+    ENTITY_SECTION_CONTROL,
     PLATFORMS,
+    SENSOR_PLATFORMS,
 )
 from .discovery import discover
 
@@ -73,14 +79,22 @@ CONFIGURE_SCHEMA = vol.Schema(
     }
 )
 
+
+def cloud_field(key, **kwargs):
+    """Hide cloud-only inputs when the Core form API supports visibility."""
+    if marker := getattr(data_entry_flow, "Optional", None):
+        return marker(key, visible={"field": CONF_NO_CLOUD, "value": False}, **kwargs)
+    return vol.Optional(key, **kwargs)
+
+
 CLOUD_SETUP_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_REGION, default="eu"): vol.In(["eu", "us", "cn", "in"]),
-        vol.Optional(CONF_CLIENT_ID): cv.string,
-        vol.Optional(CONF_CLIENT_SECRET): cv.string,
-        vol.Optional(CONF_USER_ID): cv.string,
-        vol.Optional(CONF_USERNAME, default=DOMAIN): cv.string,
         vol.Required(CONF_NO_CLOUD, default=False): bool,
+        vol.Optional(CONF_USERNAME, default=DOMAIN): cv.string,
+        cloud_field(CONF_REGION, default="eu"): vol.In(["eu", "us", "cn", "in"]),
+        cloud_field(CONF_CLIENT_ID): cv.string,
+        cloud_field(CONF_CLIENT_SECRET): cv.string,
+        cloud_field(CONF_USER_ID): cv.string,
     }
 )
 
@@ -154,22 +168,24 @@ def options_schema(entities):
 
 def schema_defaults(schema, dps_list=None, **defaults):
     """Create a new schema with default values filled in."""
-    copy = schema.extend({})
-    for field, field_type in copy.schema.items():
-        if isinstance(field_type, vol.In):
+    fields = {}
+    for marker, field_type in schema.schema.items():
+        field = copy(marker)
+        if isinstance(field_type, vol.In) and field.schema in defaults:
             value = None
             for dps in dps_list or []:
-                if dps.startswith(f"{defaults.get(field)} "):
+                if dps.startswith(f"{defaults[field.schema]} "):
                     value = dps
                     break
 
-            if value in field_type.container:
+            if value is not None and value in field_type.container:
                 field.default = vol.default_factory(value)
+                fields[field] = field_type
                 continue
-
         if field.schema in defaults:
             field.default = vol.default_factory(defaults[field])
-    return copy
+        fields[field] = field_type
+    return vol.Schema(fields, extra=schema.extra, required=schema.required)
 
 
 def dps_string_list(dps_data):
@@ -182,15 +198,21 @@ def gen_dps_strings():
     return [f"{dp} (value: ?)" for dp in range(1, 256)]
 
 
-def platform_schema(platform, dps_strings, allow_id=True, yaml=False):
+def platform_schema(platform, dps_strings, allow_id=True):
     """Generate input validation schema for a platform."""
     schema = {}
-    if yaml:
-        # In YAML mode we force the specified platform to match flow schema
-        schema[vol.Required(CONF_PLATFORM)] = vol.In([platform])
     if allow_id:
         schema[vol.Required(CONF_ID)] = vol.In(dps_strings)
     schema[vol.Required(CONF_FRIENDLY_NAME)] = str
+    if platform not in SENSOR_PLATFORMS:
+        schema[vol.Optional(CONF_ENTITY_SECTION, default=ENTITY_SECTION_CONTROL)] = (
+            SelectSelector(
+                SelectSelectorConfig(
+                    options=[ENTITY_SECTION_CONTROL, ENTITY_SECTION_CONFIG],
+                    translation_key=CONF_ENTITY_SECTION,
+                )
+            )
+        )
     return vol.Schema(schema).extend(flow_schema(platform, dps_strings))
 
 
@@ -209,26 +231,6 @@ def strip_dps_values(user_input, dps_strings):
         else:
             stripped[field] = user_input[field]
     return stripped
-
-
-def config_schema():
-    """Build schema used for setting up component."""
-    entity_schemas = [
-        platform_schema(platform, range(1, 256), yaml=True) for platform in PLATFORMS
-    ]
-    return vol.Schema(
-        {
-            DOMAIN: vol.All(
-                cv.ensure_list,
-                [
-                    DEVICE_SCHEMA.extend(
-                        {vol.Required(CONF_ENTITIES): [vol.Any(*entity_schemas)]}
-                    )
-                ],
-            )
-        },
-        extra=vol.ALLOW_EXTRA,
-    )
 
 
 async def validate_input(hass: core.HomeAssistant, data):
@@ -303,7 +305,10 @@ async def validate_input(hass: core.HomeAssistant, data):
 
 
 async def attempt_cloud_connection(hass, user_input):
-    """Create device."""
+    """Validate cloud credentials and fetch the device inventory."""
+    credential_keys = (CONF_CLIENT_ID, CONF_CLIENT_SECRET, CONF_USER_ID)
+    if not all(user_input.get(key) for key in credential_keys):
+        return None, {"reason": "authentication_failed", "msg": "Missing cloud credentials"}
     cloud_api = TuyaCloudApi(
         hass,
         user_input.get(CONF_REGION),
@@ -330,13 +335,12 @@ class LocaltuyaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for LocalTuya integration."""
 
     VERSION = ENTRIES_VERSION
-    CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
 
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
         """Get options flow for this handler."""
-        return LocalTuyaOptionsFlowHandler(config_entry)
+        return LocalTuyaOptionsFlowHandler()
 
     def __init__(self):
         """Initialize a new LocaltuyaConfigFlow."""
@@ -347,6 +351,7 @@ class LocaltuyaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         placeholders = {}
         if user_input is not None:
             if user_input.get(CONF_NO_CLOUD):
+                user_input.setdefault(CONF_REGION, "eu")
                 for i in [CONF_CLIENT_ID, CONF_CLIENT_SECRET, CONF_USER_ID]:
                     user_input[i] = ""
                 return await self._create_entry(user_input)
@@ -391,11 +396,8 @@ class LocaltuyaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options flow for LocalTuya integration."""
 
-    def __init__(self, config_entry):
+    def __init__(self):
         """Initialize localtuya options flow."""
-        self._config_entry = config_entry
-        # self.dps_strings = config_entry.data.get(CONF_DPS_STRINGS, gen_dps_strings())
-        # self.entities = config_entry.data[CONF_ENTITIES]
         self.selected_device = None
         self.editing_device = False
         self.device_data = None
@@ -444,10 +446,12 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
                 new_data = self.config_entry.data.copy()
                 new_data.update(user_input)
                 cloud_devs = cloud_api.device_list
-                for dev_id, dev in new_data[CONF_DEVICES].items():
-                    if CONF_MODEL not in dev and dev_id in cloud_devs:
-                        model = cloud_devs[dev_id].get(CONF_PRODUCT_NAME)
-                        new_data[CONF_DEVICES][dev_id][CONF_MODEL] = model
+                new_data[CONF_DEVICES] = {
+                    dev_id: {**dev, CONF_MODEL: cloud_devs[dev_id].get(CONF_PRODUCT_NAME)}
+                    if CONF_MODEL not in dev and dev_id in cloud_devs
+                    else dev
+                    for dev_id, dev in new_data[CONF_DEVICES].items()
+                }
                 new_data[ATTR_UPDATED_AT] = str(int(time.time() * 1000))
 
                 self.hass.config_entries.async_update_entry(
@@ -462,7 +466,6 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
 
         defaults = self.config_entry.data.copy()
         defaults.update(user_input or {})
-        defaults[CONF_NO_CLOUD] = False
 
         return self.async_show_form(
             step_id="cloud_setup",
@@ -503,7 +506,7 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
         devices = {
             dev_id: dev["ip"]
             for dev_id, dev in self.discovered_devices.items()
-            if dev["gwId"] not in self.config_entry.data[CONF_DEVICES]
+            if async_config_entry_by_device_id(self.hass, dev_id) is None
         }
 
         return self.async_show_form(
@@ -556,6 +559,12 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
                             CONF_PRODUCT_NAME
                         )
                 if self.editing_device:
+                    stored = self.config_entry.data[CONF_DEVICES][dev_id]
+                    self.device_data = {**stored, **self.device_data}
+                    for key in (CONF_SCAN_INTERVAL, CONF_MANUAL_DPS, CONF_RESET_DPIDS):
+                        if key not in user_input:
+                            self.device_data.pop(key, None)
+                    self.device_data.pop(CONF_ENABLE_ADD_ENTITIES)
                     if user_input[CONF_ENABLE_ADD_ENTITIES]:
                         self.editing_device = False
                         user_input[CONF_DEVICE_ID] = dev_id
@@ -592,6 +601,8 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
                         ]
                         return await self.async_step_configure_entity()
 
+                if async_config_entry_by_device_id(self.hass, user_input[CONF_DEVICE_ID]):
+                    return self.async_abort(reason="already_configured")
                 self.dps_strings = await validate_input(self.hass, user_input)
                 return await self.async_step_pick_entity_type()
             except CannotConnect:
@@ -613,11 +624,7 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
             if dev_id in cloud_devs:
                 cloud_local_key = cloud_devs[dev_id].get(CONF_LOCAL_KEY)
                 if defaults[CONF_LOCAL_KEY] != cloud_local_key:
-                    _LOGGER.info(
-                        "New local_key detected: new %s vs old %s",
-                        cloud_local_key,
-                        defaults[CONF_LOCAL_KEY],
-                    )
+                    _LOGGER.info("New local_key detected for the selected device")
                     defaults[CONF_LOCAL_KEY] = cloud_devs[dev_id].get(CONF_LOCAL_KEY)
                     note = "\nNOTE: a new local_key has been retrieved using cloud API"
                     placeholders = {"for_device": f" for device `{dev_id}`.{note}"}
@@ -664,7 +671,7 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
 
                 new_data = self.config_entry.data.copy()
                 new_data[ATTR_UPDATED_AT] = str(int(time.time() * 1000))
-                new_data[CONF_DEVICES].update({dev_id: config})
+                new_data[CONF_DEVICES] = {**new_data[CONF_DEVICES], dev_id: config}
 
                 self.hass.config_entries.async_update_entry(
                     self.config_entry,
@@ -742,17 +749,23 @@ class LocalTuyaOptionsFlowHandler(config_entries.OptionsFlow):
                     dev_id = self.device_data[CONF_DEVICE_ID]
                     new_data = self.config_entry.data.copy()
                     entry_id = self.config_entry.entry_id
-                    # removing entities from registry (they will be recreated)
-                    ent_reg = er.async_get(self.hass)
-                    reg_entities = {
-                        ent.unique_id: ent.entity_id
-                        for ent in er.async_entries_for_config_entry(ent_reg, entry_id)
-                        if dev_id in ent.unique_id
+                    old_entities = self.config_entry.data[CONF_DEVICES][dev_id][
+                        CONF_ENTITIES
+                    ]
+                    retained_ids = {entity[CONF_ID] for entity in self.entities}
+                    removed_ids = {
+                        f"local_{dev_id}_{entity[CONF_ID]}"
+                        for entity in old_entities
+                        if entity[CONF_ID] not in retained_ids
                     }
-                    for entity_id in reg_entities.values():
-                        ent_reg.async_remove(entity_id)
+                    ent_reg = er.async_get(self.hass)
+                    for ent in er.async_entries_for_config_entry(ent_reg, entry_id):
+                        if ent.unique_id in removed_ids:
+                            ent_reg.async_remove(ent.entity_id)
 
-                    new_data[CONF_DEVICES][dev_id] = self.device_data
+                    new_data[CONF_DEVICES] = {
+                        **new_data[CONF_DEVICES], dev_id: self.device_data
+                    }
                     new_data[ATTR_UPDATED_AT] = str(int(time.time() * 1000))
                     self.hass.config_entries.async_update_entry(
                         self.config_entry,

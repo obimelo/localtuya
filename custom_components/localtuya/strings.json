@@ -52,6 +52,7 @@
                 "title": "Entity Configuration",
                 "description": "Editing entity with DPS `{id}` and platform `{platform}`.",
                 "data": {
+                    "entity_section": "Device page section",
                     "id": "ID",
                     "friendly_name": "Friendly name",
                     "current": "Current",
@@ -132,6 +133,14 @@
             "yaml_import": {
                 "title": "Not Supported",
                 "description": "Options cannot be edited when configured via YAML."
+            }
+        }
+    },
+    "selector": {
+        "entity_section": {
+            "options": {
+                "control": "Controls",
+                "config": "Configuration"
             }
         }
     },
