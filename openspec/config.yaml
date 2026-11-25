@@ -1,0 +1,14 @@
+schema: spec-driven
+
+context: |
+  Preserve LAN-only setup and control unless explicitly changing that contract.
+  Device DP identifiers, types, encodings, and protocol quirks vary by model.
+  Use synthetic device IDs, local keys, cloud credentials, and payloads in examples and fixtures.
+  Keep observed implementation gaps separate from intended requirements.
+
+rules:
+  specs:
+    - Bind each behavior to concrete, observable scenarios, including relevant error or fallback paths.
+    - For device-specific behavior, identify the governing DP configuration and protocol version.
+  tasks:
+    - Distinguish mocked verification from Home Assistant or physical-device verification.

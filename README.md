@@ -195,6 +195,10 @@ logger:
 
 Then, edit the device that is showing problems and check the "Enable debugging for this device" button.
 
+# Development specifications
+
+The [OpenSpec baseline](openspec/README.md) documents the behavior of this checkout, including configuration, LAN communication, all entity platforms, and known implementation gaps.
+
 # Notes:
 
 * Do not declare anything as "tuya", such as by initiating a "switch.tuya". Using "tuya" launches Home Assistant's built-in, cloud-based Tuya integration in lieu of localtuya.
